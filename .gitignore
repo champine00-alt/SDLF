@@ -1,0 +1,21 @@
+# Dépendances
+node_modules/
+
+# Fichiers de compilation
+build/
+dist/
+
+# Tests
+coverage/
+
+# Logs
+*.log
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Variables d'environnement et clés secrètes
+.env
+.env.*
+!.env.example
