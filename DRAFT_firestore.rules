@@ -1,0 +1,212 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable Hardened Primitives
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'champine00@gmail.com'
+      );
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'name', 'email', 'city', 'role', 'isVerified', 'isBlocked', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'name', 'email', 'phone', 'whatsapp', 'city', 'neighborhood',
+          'avatar', 'accountType', 'shopName', 'role', 'isVerified', 'isBlocked',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 254
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && (!('whatsapp' in data) || (data.whatsapp is string && data.whatsapp.size() <= 32))
+        && data.city is string && data.city.size() >= 1 && data.city.size() <= 80
+        && (!('neighborhood' in data) || (data.neighborhood is string && data.neighborhood.size() <= 80))
+        && (!('avatar' in data) || (data.avatar is string && data.avatar.size() <= 1024))
+        && (!('accountType' in data) || data.accountType in ['particulier', 'professionnel'])
+        && (!('shopName' in data) || (data.shopName is string && data.shopName.size() <= 120))
+        && data.role in ['user', 'admin']
+        && data.isVerified is bool
+        && data.isBlocked is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidListing(data) {
+      return data.keys().hasAll([
+          'id', 'title', 'price', 'currency', 'category', 'condition',
+          'images', 'city', 'sellerId', 'status', 'isFeatured', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'title', 'description', 'price', 'originalPrice', 'currency', 'category',
+          'condition', 'images', 'city', 'neighborhood', 'sellerId', 'sellerName',
+          'sellerPhone', 'sellerWhatsapp', 'sellerAvatar', 'sellerVerified',
+          'isNegotiable', 'hasDelivery', 'deliveryFee', 'status', 'isFeatured',
+          'boostPlanId', 'boostPlanName', 'boostPriority', 'boostStartedAt',
+          'boostExpiresAt', 'boostPaymentId', 'viewsCount', 'favoritesCount',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.title is string && data.title.size() >= 5 && data.title.size() <= 160
+        && (!('description' in data) || (data.description is string && data.description.size() <= 4000))
+        && data.price is number && data.price >= 0 && data.price <= 1000000000
+        && (!('originalPrice' in data) || (data.originalPrice is number && data.originalPrice >= 0 && data.originalPrice <= 1000000000))
+        && data.currency == 'FCFA'
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 64
+        && data.condition is string && data.condition.size() >= 1 && data.condition.size() <= 40
+        && data.images is list && data.images.size() >= 1 && data.images.size() <= 8
+        && data.images[0] is string && data.images[0].size() <= 700000
+        && data.city is string && data.city.size() >= 1 && data.city.size() <= 80
+        && (!('neighborhood' in data) || (data.neighborhood is string && data.neighborhood.size() <= 80))
+        && isValidId(data.sellerId)
+        && (!('sellerName' in data) || (data.sellerName is string && data.sellerName.size() <= 120))
+        && (!('sellerPhone' in data) || (data.sellerPhone is string && data.sellerPhone.size() <= 32))
+        && (!('sellerWhatsapp' in data) || (data.sellerWhatsapp is string && data.sellerWhatsapp.size() <= 32))
+        && (!('sellerAvatar' in data) || (data.sellerAvatar is string && data.sellerAvatar.size() <= 1024))
+        && (!('sellerVerified' in data) || data.sellerVerified is bool)
+        && (!('isNegotiable' in data) || data.isNegotiable is bool)
+        && (!('hasDelivery' in data) || data.hasDelivery is bool)
+        && (!('deliveryFee' in data) || (data.deliveryFee is number && data.deliveryFee >= 0 && data.deliveryFee <= 500000))
+        && data.status in ['active', 'pending', 'reserved', 'sold']
+        && data.isFeatured is bool
+        && (!('boostPlanId' in data) || data.boostPlanId in ['decouverte', 'standard', 'premium', 'pro', 'vip'])
+        && (!('boostPlanName' in data) || (data.boostPlanName is string && data.boostPlanName.size() <= 40))
+        && (!('boostPriority' in data) || (data.boostPriority is number && data.boostPriority >= 0 && data.boostPriority <= 10))
+        && (!('boostPaymentId' in data) || (data.boostPaymentId is string && data.boostPaymentId.size() <= 128))
+        && (!('viewsCount' in data) || (data.viewsCount is number && data.viewsCount >= 0))
+        && (!('favoritesCount' in data) || (data.favoritesCount is number && data.favoritesCount >= 0))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Connection check doc
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, create, update, delete: if false;
+    }
+
+    // Admin registry (read-only self check)
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && request.auth.uid == adminId;
+      allow list, create, update, delete: if false;
+    }
+
+    // User Profiles (PII strictly isolated to Owner or Admin)
+    match /users/{userId} {
+      allow get: if isSignedIn() && isValidId(userId) && (request.auth.uid == userId || isAdmin());
+      allow list: if isSignedIn() && (resource.data.uid == request.auth.uid || isAdmin());
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && request.auth.uid == userId
+        && isValidUserProfile(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().role == 'user'
+        && incoming().isBlocked == false
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUserProfile(incoming())
+        && (
+          isAdmin() || (
+            request.auth.uid == userId
+            && incoming().uid == existing().uid
+            && incoming().role == existing().role
+            && incoming().isVerified == existing().isVerified
+            && incoming().isBlocked == existing().isBlocked
+            && incoming().createdAt == existing().createdAt
+            && incoming().updatedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'phone', 'whatsapp', 'city', 'neighborhood',
+              'avatar', 'accountType', 'shopName', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isAdmin();
+    }
+
+    // Listings: Publicly readable when active; Boost activation strictly forbidden from clients
+    match /listings/{listingId} {
+      allow get: if isValidId(listingId) && (
+        existing().status == 'active'
+        || (isSignedIn() && existing().sellerId == request.auth.uid)
+        || isAdmin()
+      );
+      allow list: if resource.data.status == 'active'
+        || (isSignedIn() && resource.data.sellerId == request.auth.uid)
+        || isAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(listingId)
+        && isValidListing(incoming())
+        && incoming().id == listingId
+        && incoming().sellerId == request.auth.uid
+        && incoming().isFeatured == false
+        && !('boostPlanId' in incoming())
+        && !('boostPlanName' in incoming())
+        && !('boostPriority' in incoming())
+        && !('boostStartedAt' in incoming())
+        && !('boostExpiresAt' in incoming())
+        && !('boostPaymentId' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(listingId)
+        && isValidListing(incoming())
+        && (
+          isAdmin() || (
+            existing().sellerId == request.auth.uid
+            && incoming().id == existing().id
+            && incoming().sellerId == existing().sellerId
+            && incoming().createdAt == existing().createdAt
+            && incoming().updatedAt == request.time
+            && existing().status != 'sold'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'description', 'price', 'originalPrice', 'category',
+              'condition', 'images', 'city', 'neighborhood', 'isNegotiable',
+              'hasDelivery', 'deliveryFee', 'status', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isVerifiedUser()
+        && isValidId(listingId)
+        && (existing().sellerId == request.auth.uid || isAdmin());
+    }
+
+    // Boost Payments: Strictly server-authoritative (Admin SDK / Cloud Functions only for writes)
+    match /boostPayments/{paymentId} {
+      allow get: if isSignedIn() && isValidId(paymentId) && (
+        existing().sellerId == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        resource.data.sellerId == request.auth.uid || isAdmin()
+      );
+      allow create, update, delete: if false;
+    }
+  }
+}

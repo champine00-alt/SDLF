@@ -31,6 +31,11 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { SENEGAL_CITIES } from '../data/mockData';
+import {
+  getBoostBadgeLabel,
+  getBoostRemainingLabel,
+  isListingBoostActive,
+} from '../lib/boostPlans';
 
 type AccountTab = 
   | 'profile' 
@@ -229,10 +234,10 @@ export const UserProfileModal: React.FC = () => {
                   setIsProfileModalOpen(false);
                   setIsAdminModalOpen(true);
                 }}
-                className="mt-3 w-full py-1.5 px-3 bg-slate-900 hover:bg-slate-800 text-amber-300 text-xs font-bold rounded-xl flex items-center justify-center gap-1.5 transition-colors"
+                className="mt-3 w-full py-2 px-3 bg-slate-900 hover:bg-slate-800 text-amber-300 text-xs font-bold rounded-xl flex items-center justify-center gap-2 transition-colors border border-amber-500/30"
               >
                 <span>👑</span>
-                <span>Console Administrateur</span>
+                <span>Tableau de Bord Admin V2</span>
               </button>
             )}
           </div>
@@ -633,16 +638,20 @@ export const UserProfileModal: React.FC = () => {
                   <p className="text-sm font-semibold text-slate-700">Aucune annonce active en ce moment.</p>
                 </div>
               ) : (
-                myActiveListings.map(listing => (
+                myActiveListings.map(listing => {
+                  const boostActive = isListingBoostActive(listing);
+                  const boostLabel = getBoostBadgeLabel(listing);
+                  const remainingLabel = getBoostRemainingLabel(listing.boostExpiresAt);
+                  return (
                   <div key={listing.id} className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3 min-w-0">
                       <img src={listing.images[0]} alt="" className="w-14 h-14 rounded-xl object-cover shrink-0" />
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <h4 className="text-sm font-bold text-slate-900 truncate">{listing.title}</h4>
-                          {listing.isFeatured && (
+                          {boostActive && (
                             <span className="text-[10px] bg-amber-500 text-slate-950 font-bold px-2 py-0.5 rounded">
-                              Boosté
+                              {boostLabel}{remainingLabel ? ` · ${remainingLabel}` : ''}
                             </span>
                           )}
                         </div>
@@ -663,10 +672,13 @@ export const UserProfileModal: React.FC = () => {
                         <Check className="w-3.5 h-3.5 text-emerald-600" />
                         <span>Marquer vendu</span>
                       </button>
-                      {!listing.isFeatured && (
+                      {!boostActive && (
                         <button
-                          onClick={() => boostListing(listing.id)}
-                          className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold rounded-lg flex items-center gap-1 transition"
+                          onClick={() => {
+                            setIsProfileModalOpen(false);
+                            boostListing(listing.id);
+                          }}
+                          className="px-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold rounded-lg flex items-center gap-1 transition cursor-pointer"
                         >
                           <Sparkles className="w-3.5 h-3.5" />
                           <span>Booster</span>
@@ -680,7 +692,8 @@ export const UserProfileModal: React.FC = () => {
                       </button>
                     </div>
                   </div>
-                ))
+                  );
+                })
               )}
             </div>
           )}

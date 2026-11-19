@@ -16,11 +16,14 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { getBoostBadgeLabel, isListingBoostActive } from '../lib/boostPlans';
 
 export const ListingDetailModal: React.FC = () => {
   const { 
     selectedListing, 
     closeListingDetail, 
+    currentUser,
+    openBoostCheckout,
     favorites, 
     toggleFavorite,
     startChatWithSeller,
@@ -35,6 +38,9 @@ export const ListingDetailModal: React.FC = () => {
   if (!selectedListing) return null;
 
   const isFav = favorites.includes(selectedListing.id);
+  const boostActive = isListingBoostActive(selectedListing);
+  const boostBadge = getBoostBadgeLabel(selectedListing);
+  const isOwner = Boolean(currentUser && currentUser.id === selectedListing.sellerId);
 
   const handleShare = async () => {
     if (navigator.share) {
@@ -103,10 +109,10 @@ export const ListingDetailModal: React.FC = () => {
                   className="w-full h-full object-cover object-center"
                 />
 
-                {selectedListing.isFeatured && (
+                {boostActive && (
                   <span className="absolute top-3 left-3 px-2.5 py-1 bg-amber-500 text-slate-950 font-bold text-xs rounded-md shadow-sm flex items-center gap-1">
                     <Sparkles className="w-3 h-3" />
-                    Annonce Sponsorisée
+                    {boostBadge}
                   </span>
                 )}
               </div>
@@ -267,6 +273,20 @@ export const ListingDetailModal: React.FC = () => {
                       <span>{isFav ? 'Sauvegardé' : 'Favoris'}</span>
                     </button>
                   </div>
+
+                  {isOwner && !boostActive && selectedListing.status === 'active' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeListingDetail();
+                        openBoostCheckout(selectedListing);
+                      }}
+                      className="w-full py-2.5 px-4 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Sparkles className="w-4 h-4" />
+                      <span>Booster cette annonce (dès 500 FCFA)</span>
+                    </button>
+                  )}
                 </div>
               </div>
 

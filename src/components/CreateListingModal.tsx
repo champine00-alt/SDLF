@@ -3,20 +3,22 @@ import {
   X, 
   UploadCloud, 
   Sparkles, 
-  MapPin, 
-  Truck, 
-  Tag, 
-  Check, 
-  Smartphone, 
-  Image as ImageIcon,
-  DollarSign
+  Truck
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { CATEGORIES, SENEGAL_CITIES, DAKAR_NEIGHBORHOODS } from '../data/mockData';
-import { CategoryId, Condition } from '../types';
+import { BoostPlansGrid } from './BoostPlansGrid';
+import { getBoostPlan } from '../lib/boostPlans';
+import type { BoostPlan, BoostPlanId, CategoryId, Condition } from '../types';
 
 export const CreateListingModal: React.FC = () => {
-  const { isCreateListingOpen, setIsCreateListingOpen, addListing } = useApp();
+  const {
+    isCreateListingOpen,
+    setIsCreateListingOpen,
+    addListing,
+    openBoostCheckout,
+    showToast,
+  } = useApp();
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -28,7 +30,8 @@ export const CreateListingModal: React.FC = () => {
   const [isNegotiable, setIsNegotiable] = useState(true);
   const [hasDelivery, setHasDelivery] = useState(true);
   const [deliveryFee, setDeliveryFee] = useState('2000');
-  const [isBoosted, setIsBoosted] = useState(false);
+  const [selectedBoostPlanId, setSelectedBoostPlanId] = useState<BoostPlanId | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [images, setImages] = useState<string[]>([]);
 
   if (!isCreateListingOpen) return null;
@@ -40,45 +43,79 @@ export const CreateListingModal: React.FC = () => {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
-      const scale = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const scale = Math.min(1, 800 / Math.max(img.width, img.height));
       const canvas = document.createElement('canvas');
-      canvas.width = Math.round(img.width * scale);
-      canvas.height = Math.round(img.height * scale);
-      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
-      setImages(prev => [...prev, canvas.toDataURL('image/jpeg', 0.8)]);
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        let quality = 0.72;
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        while (dataUrl.length > 350000 && quality > 0.35) {
+          quality -= 0.12;
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+        }
+        setImages(prev => [...prev, dataUrl]);
+      }
       URL.revokeObjectURL(url);
     };
     img.onerror = () => URL.revokeObjectURL(url);
     img.src = url;
   };
 
+  const handleSelectBoostPlan = (plan: BoostPlan) => {
+    setSelectedBoostPlanId(prev => (prev === plan.id ? null : plan.id));
+  };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     const numPrice = parseInt(price.replace(/[^0-9]/g, ''), 10);
     if (!title.trim() || isNaN(numPrice) || numPrice <= 0) return;
-    if (images.length === 0) { alert('Ajoutez au moins une photo de votre article.'); return; }
+    if (images.length === 0) {
+      showToast('Ajoutez au moins une photo de votre article.', 'warning');
+      return;
+    }
 
-    addListing({
-      title: title.trim(),
-      description: description.trim(),
-      price: numPrice,
-      category,
-      condition,
-      images,
-      city,
-      neighborhood: city === 'Dakar' ? neighborhood : '',
-      isNegotiable,
-      hasDelivery,
-      deliveryFee: hasDelivery ? parseInt(deliveryFee, 10) || 0 : 0,
-      isBoosted
-    });
+    setIsSubmitting(true);
+    try {
+      const created = await addListing({
+        title: title.trim(),
+        description: description.trim(),
+        price: numPrice,
+        category,
+        condition,
+        images,
+        city,
+        neighborhood: city === 'Dakar' ? neighborhood : '',
+        isNegotiable,
+        hasDelivery,
+        deliveryFee: hasDelivery ? parseInt(deliveryFee, 10) || 0 : 0,
+        isBoosted: false
+      });
+
+      if (created) {
+        setTitle('');
+        setDescription('');
+        setPrice('');
+        setImages([]);
+        setSelectedBoostPlanId(null);
+        if (selectedBoostPlanId) {
+          openBoostCheckout(created, selectedBoostPlanId);
+        }
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  const selectedPlan = selectedBoostPlanId ? getBoostPlan(selectedBoostPlanId) : null;
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
       <div 
-        className="relative w-full max-w-2xl bg-white rounded-3xl shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col"
+        className="relative w-full max-w-4xl bg-white rounded-3xl shadow-2xl overflow-hidden my-auto max-h-[92vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -88,6 +125,7 @@ export const CreateListingModal: React.FC = () => {
             <p className="text-xs text-slate-500">Donnez une seconde vie à votre objet au Sénégal</p>
           </div>
           <button
+            type="button"
             onClick={() => setIsCreateListingOpen(false)}
             className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-colors"
           >
@@ -142,6 +180,8 @@ export const CreateListingModal: React.FC = () => {
             <input
               type="text"
               required
+              minLength={5}
+              maxLength={160}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Ex: Samsung Galaxy S22 128Go avec chargeur"
@@ -298,41 +338,53 @@ export const CreateListingModal: React.FC = () => {
             />
           </div>
 
-          {/* Boost Option (Business Model Feature) */}
-          <div className={`p-4 rounded-2xl border transition-all ${
-            isBoosted ? 'bg-amber-50 border-amber-300' : 'bg-slate-50 border-slate-200'
-          }`}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-start gap-3">
+          {/* Boost Options (5 Formules SamaDeal Boost - PayDunya Wave / OM) */}
+          <div className="p-4 sm:p-5 rounded-2xl border border-slate-200 bg-slate-50/70 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-start gap-2.5">
                 <Sparkles className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                 <div>
-                  <h4 className="text-xs font-bold text-slate-900">
-                    Option Sponsorisée SamaDeal Boost (+5x plus de vues)
+                  <h4 className="text-sm font-bold text-slate-900">
+                    Booster la visibilité de votre annonce (Optionnel)
                   </h4>
-                  <p className="text-[11px] text-slate-600 mt-0.5">
-                    Votre annonce restera épinglée en tête des résultats pendant 7 jours.
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Choisissez l’une des 5 formules ci-dessous. Activation immédiate après confirmation réelle via Wave ou Orange Money (PayDunya).
                   </p>
-                  <span className="inline-block mt-1 text-xs font-bold text-amber-800 font-mono">
-                    1 500 FCFA (réglable par Wave / OM)
-                  </span>
                 </div>
               </div>
-              <input
-                type="checkbox"
-                checked={isBoosted}
-                onChange={(e) => setIsBoosted(e.target.checked)}
-                className="w-5 h-5 text-amber-600 rounded border-slate-300 focus:ring-amber-500 mt-1 cursor-pointer"
-              />
+
+              {selectedPlan && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedBoostPlanId(null)}
+                  className="text-xs font-semibold text-slate-500 hover:text-slate-900 underline self-start sm:self-center shrink-0 cursor-pointer"
+                >
+                  Publier sans Boost
+                </button>
+              )}
             </div>
+
+            <BoostPlansGrid
+              selectedPlanId={selectedBoostPlanId}
+              onSelectPlan={handleSelectBoostPlan}
+              compact
+            />
           </div>
 
           {/* Submit CTA */}
           <div className="pt-2">
             <button
               type="submit"
-              className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm active:scale-98 flex items-center justify-center gap-2"
+              disabled={isSubmitting}
+              className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold text-sm rounded-xl transition-all shadow-sm active:scale-98 flex items-center justify-center gap-2 cursor-pointer"
             >
-              <span>Publier mon annonce maintenant</span>
+              <span>
+                {isSubmitting
+                  ? 'Publication en cours...'
+                  : selectedPlan
+                  ? `Publier et payer le Boost ${selectedPlan.name} (${selectedPlan.priceFCFA.toLocaleString('fr-FR')} FCFA)`
+                  : 'Publier mon annonce maintenant'}
+              </span>
             </button>
           </div>
         </form>

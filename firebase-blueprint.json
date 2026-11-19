@@ -1,0 +1,121 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "SamaDeal registered seller and buyer profile",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "maxLength": 254 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "whatsapp": { "type": "string", "maxLength": 32 },
+        "city": { "type": "string", "maxLength": 80 },
+        "neighborhood": { "type": "string", "maxLength": 80 },
+        "avatar": { "type": "string", "maxLength": 1024 },
+        "accountType": { "type": "string", "enum": ["particulier", "professionnel"] },
+        "shopName": { "type": "string", "maxLength": 120 },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "isVerified": { "type": "boolean" },
+        "isBlocked": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "city", "role", "isVerified", "isBlocked", "createdAt", "updatedAt"]
+    },
+    "Listing": {
+      "title": "Listing",
+      "description": "Marketplace classified listing on SamaDeal with server-controlled Boost fields",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 5, "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 4000 },
+        "price": { "type": "number" },
+        "currency": { "type": "string", "enum": ["FCFA"] },
+        "category": { "type": "string", "maxLength": 64 },
+        "condition": { "type": "string", "maxLength": 40 },
+        "images": { "type": "array" },
+        "city": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "neighborhood": { "type": "string", "maxLength": 80 },
+        "sellerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sellerName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "sellerPhone": { "type": "string", "maxLength": 32 },
+        "sellerWhatsapp": { "type": "string", "maxLength": 32 },
+        "sellerAvatar": { "type": "string", "maxLength": 1024 },
+        "sellerVerified": { "type": "boolean" },
+        "isNegotiable": { "type": "boolean" },
+        "hasDelivery": { "type": "boolean" },
+        "deliveryFee": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "pending", "reserved", "sold"] },
+        "isFeatured": { "type": "boolean" },
+        "boostPlanId": { "type": "string", "enum": ["decouverte", "standard", "premium", "pro", "vip"] },
+        "boostPlanName": { "type": "string", "maxLength": 40 },
+        "boostPriority": { "type": "number" },
+        "boostStartedAt": { "type": "string", "format": "date-time" },
+        "boostExpiresAt": { "type": "string", "format": "date-time" },
+        "boostPaymentId": { "type": "string", "maxLength": 128 },
+        "viewsCount": { "type": "number" },
+        "favoritesCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "price", "currency", "category", "condition", "images", "city", "sellerId", "status", "isFeatured", "createdAt", "updatedAt"]
+    },
+    "BoostPayment": {
+      "title": "BoostPayment",
+      "description": "Server-authoritative PayDunya payment and Boost activation record",
+      "type": "object",
+      "properties": {
+        "paymentId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "listingId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sellerId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "planId": { "type": "string", "enum": ["decouverte", "standard", "premium", "pro", "vip"] },
+        "planName": { "type": "string", "maxLength": 40 },
+        "amountFCFA": { "type": "number" },
+        "durationHours": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["wave", "orange_money"] },
+        "provider": { "type": "string", "enum": ["paydunya"] },
+        "paydunyaToken": { "type": "string", "maxLength": 200 },
+        "checkoutUrl": { "type": "string", "maxLength": 1024 },
+        "receiptUrl": { "type": "string", "maxLength": 1024 },
+        "status": { "type": "string", "enum": ["pending", "completed", "failed", "cancelled", "duplicate_rejected"] },
+        "activated": { "type": "boolean" },
+        "idempotencyKey": { "type": "string", "maxLength": 160 },
+        "boostStartedAt": { "type": "string", "format": "date-time" },
+        "boostExpiresAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["paymentId", "listingId", "sellerId", "planId", "amountFCFA", "durationHours", "paymentMethod", "provider", "status", "activated", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator lookup document",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 254 }
+      },
+      "required": ["uid", "email"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private user profiles with PII restricted to owner and admin"
+    },
+    "/listings/{listingId}": {
+      "schema": { "$ref": "#/entities/Listing" },
+      "description": "Publicly browsable active listings; Boost fields are server-only"
+    },
+    "/boostPayments/{paymentId}": {
+      "schema": { "$ref": "#/entities/BoostPayment" },
+      "description": "PayDunya Wave/OM Boost payment transactions; server-write only"
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "Admin authorization registry"
+    }
+  }
+}

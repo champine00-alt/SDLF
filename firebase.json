@@ -1,0 +1,21 @@
+{
+  "firestore": {
+    "database": "ai-studio-sdl-dc35d0e8-e882-46a0-a2e3-484f1cebaddb",
+    "rules": "firestore.rules"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
+  ]
+}

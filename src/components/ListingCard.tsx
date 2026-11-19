@@ -1,7 +1,8 @@
 import React from 'react';
-import { Heart, MapPin, ShieldCheck, Truck, Sparkles, Check } from 'lucide-react';
+import { Heart, MapPin, ShieldCheck, Truck, Sparkles } from 'lucide-react';
 import { Listing } from '../types';
 import { useApp } from '../context/AppContext';
+import { getBoostBadgeLabel, isListingBoostActive } from '../lib/boostPlans';
 
 interface ListingCardProps {
   listing: Listing;
@@ -10,11 +11,17 @@ interface ListingCardProps {
 export const ListingCard: React.FC<ListingCardProps> = ({ listing }) => {
   const { favorites, toggleFavorite, openListingDetail } = useApp();
   const isFav = favorites.includes(listing.id);
+  const boostActive = isListingBoostActive(listing);
+  const boostLabel = getBoostBadgeLabel(listing);
 
   return (
     <article 
       onClick={() => openListingDetail(listing)}
-      className="group relative bg-white rounded-2xl border border-slate-200 hover:border-emerald-500/40 hover:shadow-lg transition-all duration-200 overflow-hidden flex flex-col cursor-pointer"
+      className={`group relative bg-white rounded-2xl border transition-all duration-200 overflow-hidden flex flex-col cursor-pointer ${
+        boostActive
+          ? 'border-amber-400/70 hover:border-amber-500 hover:shadow-lg'
+          : 'border-slate-200 hover:border-emerald-500/40 hover:shadow-lg'
+      }`}
     >
       {/* Image Container (Aspect 4:3) */}
       <div className="relative aspect-[4/3] w-full bg-slate-100 overflow-hidden">
@@ -28,10 +35,10 @@ export const ListingCard: React.FC<ListingCardProps> = ({ listing }) => {
 
         {/* Top Badges (Subtle status, not pill sandwiches) */}
         <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 z-10">
-          {listing.isFeatured && (
+          {boostActive && (
             <span className="px-2 py-0.5 bg-amber-500 text-slate-950 font-bold text-[10px] uppercase tracking-wide rounded-md shadow-sm flex items-center gap-1">
               <Sparkles className="w-2.5 h-2.5" />
-              Sponsorisé
+              {boostLabel}
             </span>
           )}
           {listing.status === 'sold' && (

@@ -107,7 +107,7 @@ export const Footer: React.FC = () => {
                     className="text-emerald-400 hover:text-emerald-300 font-bold transition-colors flex items-center gap-1.5"
                   >
                     <span>👑</span>
-                    <span>Console Administrateur</span>
+                    <span>Tableau de Bord Admin V2</span>
                   </button>
                 </li>
               )}

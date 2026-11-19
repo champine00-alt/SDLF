@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { 
   Listing, 
   Seller, 
@@ -9,20 +9,35 @@ import {
   EscrowPayment, 
   ReportItem,
   PlatformSettings,
-  AppNotification
+  AppNotification,
+  BoostPlanId
 } from '../types';
 import { DEFAULT_PLATFORM_SETTINGS, INITIAL_MOCK_LISTINGS } from '../data/mockData';
-import { auth } from '../lib/firebase.ts';
+import { auth, db, googleAuthProvider } from '../lib/firebase.ts';
+import { handleFirestoreError, OperationType } from '../lib/firestoreError.ts';
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
   sendEmailVerification, 
+  signInWithPopup,
+  browserPopupRedirectResolver,
   signOut, 
   onAuthStateChanged,
   sendPasswordResetEmail,
   updatePassword,
   applyActionCode
 } from 'firebase/auth';
+import {
+  collection,
+  doc,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  onSnapshot,
+  query,
+  where,
+  serverTimestamp
+} from 'firebase/firestore';
 
 export type SortOption = 'latest' | 'price_asc' | 'price_desc' | 'popular';
 export type ActiveTab = 'home' | 'explore' | 'messages' | 'profile' | 'admin';
@@ -73,6 +88,21 @@ interface AppContextType {
   isMobileSimulator: boolean;
   isSupabaseModalOpen: boolean;
   setIsSupabaseModalOpen: (open: boolean) => void;
+  boostCheckoutListing: Listing | null;
+  boostCheckoutInitialPlan: BoostPlanId | null;
+  openBoostCheckout: (listing: Listing, planId?: BoostPlanId) => void;
+  closeBoostCheckout: () => void;
+  applyConfirmedBoost: (
+    listingId: string,
+    boost: {
+      planId: BoostPlanId;
+      planName: string;
+      priority: number;
+      boostStartedAt: string;
+      boostExpiresAt: string;
+      paymentId: string;
+    }
+  ) => void;
   toastMessage: { text: string; type: 'success' | 'info' | 'warning' } | null;
 
   // Actions
@@ -80,6 +110,7 @@ interface AppContextType {
   openAuthModal: (mode?: AuthMode) => void;
   closeAuthModal: () => void;
   loginUser: (identifier: string, pass: string) => Promise<boolean>;
+  loginWithGoogle: () => Promise<boolean>;
   registerUser: (data: {
     name: string;
     email: string;
@@ -179,7 +210,7 @@ interface AppContextType {
     hasDelivery: boolean;
     deliveryFee?: number;
     isBoosted?: boolean;
-  }) => void;
+  }) => Promise<Listing | null>;
   deleteListing: (id: string) => void;
   markAsSold: (id: string) => void;
   boostListing: (id: string) => void;
@@ -208,7 +239,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [listings, setListings] = useState<Listing[]>(() => {
     try {
       const saved = localStorage.getItem('samadeal_listings');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const sanitized = parsed.filter(
+            (item): item is Listing =>
+              Boolean(item) &&
+              typeof item === 'object' &&
+              typeof item.id === 'string' &&
+              typeof item.title === 'string' &&
+              typeof item.price === 'number' &&
+              Array.isArray(item.images) &&
+              Boolean(item.seller) &&
+              typeof item.seller.name === 'string'
+          );
+          if (sanitized.length > 0) return sanitized;
+        }
+      }
     } catch {}
     return INITIAL_MOCK_LISTINGS;
   });
@@ -216,19 +263,27 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('samadeal_favorites');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((id): id is string => typeof id === 'string');
+        }
+      }
+    } catch {}
+    return [];
   });
 
   const [currentUser, setCurrentUser] = useState<Seller | null>(() => {
     try {
       const saved = localStorage.getItem('samadeal_local_user');
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object' && typeof parsed.id === 'string' && typeof parsed.name === 'string') {
+          return parsed as Seller;
+        }
+      }
+    } catch {}
+    return null;
   });
 
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
@@ -274,18 +329,30 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [targetReportListing, setTargetReportListing] = useState<Listing | null>(null);
   const [isMobileSimulator, setIsMobileSimulator] = useState(false);
   const [isSupabaseModalOpen, setIsSupabaseModalOpen] = useState(false);
+  const [boostCheckoutListing, setBoostCheckoutListing] = useState<Listing | null>(null);
+  const [boostCheckoutInitialPlan, setBoostCheckoutInitialPlan] = useState<BoostPlanId | null>(null);
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'info' | 'warning' } | null>(null);
 
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
-  const isAdminAuthenticated = currentUser?.role === 'admin' || currentUser?.email === 'admin@samadeal.sn';
+  const isSuperAdminEmail = (email?: string | null) => {
+    if (!email) return false;
+    return email.toLowerCase().trim() === 'champine00@gmail.com';
+  };
+  const isAdminAuthenticated = Boolean(
+    currentUser?.email && isSuperAdminEmail(currentUser.email)
+  );
 
   const [platformSettings, setPlatformSettings] = useState<PlatformSettings>(() => {
     try {
       const saved = localStorage.getItem('samadeal_platform_settings');
-      return saved ? JSON.parse(saved) : DEFAULT_PLATFORM_SETTINGS;
-    } catch {
-      return DEFAULT_PLATFORM_SETTINGS;
-    }
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          return { ...DEFAULT_PLATFORM_SETTINGS, ...parsed };
+        }
+      }
+    } catch {}
+    return DEFAULT_PLATFORM_SETTINGS;
   });
 
   const [allUsers, setAllUsers] = useState<Seller[]>([]);
@@ -337,8 +404,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           memberSince: 'Novembre 2026',
           isVerified: true,
           isBlocked: false,
-          accountType: 'particulier',
-          role: user.email === 'admin@samadeal.sn' ? 'admin' : 'user',
+          role: isSuperAdminEmail(user.email) ? 'admin' : 'user',
+          badge: isSuperAdminEmail(user.email) ? 'Super-Administrateur Propriétaire' : undefined,
           responseTime: 'Moins d\'une heure',
           totalSales: 0,
           salesCount: 0,
@@ -348,6 +415,40 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         try {
           localStorage.setItem('samadeal_local_user', JSON.stringify(seller));
         } catch {}
+
+        // Handle PayDunya return_url confirmation if present
+        const boostStatus = params.get('boost_status');
+        const returnPaymentId = params.get('paymentId');
+        if (boostStatus === 'return' && returnPaymentId) {
+          user.getIdToken().then(async (idToken) => {
+            try {
+              const resp = await fetch('/api/boost/confirm', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${idToken}`,
+                },
+                body: JSON.stringify({ paymentId: returnPaymentId }),
+              });
+              const data = await resp.json();
+              if (resp.ok && data.confirmed && data.listingId && data.planId) {
+                applyConfirmedBoost(data.listingId, {
+                  planId: data.planId,
+                  planName: data.planName,
+                  priority: data.priority,
+                  boostStartedAt: data.boostStartedAt,
+                  boostExpiresAt: data.boostExpiresAt,
+                  paymentId: returnPaymentId,
+                });
+                showToast(`Boost ${data.planName || ''} confirmé par PayDunya !`, 'success');
+              }
+            } catch {
+              // Silent fallback; user can still click Verify in Boost modal
+            } finally {
+              window.history.replaceState({}, document.title, window.location.pathname);
+            }
+          });
+        }
       } else if (!user) {
         try {
           const localUser = localStorage.getItem('samadeal_local_user');
@@ -359,6 +460,75 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setCurrentUser(null);
       }
     });
+    return () => unsubscribe();
+  }, []);
+
+  // Real-time Firestore listener for active marketplace listings (reflects server-confirmed Boosts live)
+  useEffect(() => {
+    const listingsQuery = query(collection(db, 'listings'), where('status', '==', 'active'));
+    const unsubscribe = onSnapshot(
+      listingsQuery,
+      (snapshot) => {
+        const fsListings: Listing[] = snapshot.docs.map((d) => {
+          const data = d.data() as Record<string, unknown>;
+          return {
+            id: String(data.id || d.id),
+            title: String(data.title || ''),
+            description: String(data.description || ''),
+            price: Number(data.price || 0),
+            originalPrice: typeof data.originalPrice === 'number' ? data.originalPrice : undefined,
+            currency: String(data.currency || 'FCFA'),
+            category: (data.category as CategoryId) || 'telephones-electronique',
+            condition: (data.condition as Condition) || 'Très bon état',
+            images: Array.isArray(data.images) ? (data.images as string[]) : [],
+            city: String(data.city || 'Dakar'),
+            neighborhood: String(data.neighborhood || ''),
+            sellerId: String(data.sellerId || ''),
+            seller: {
+              id: String(data.sellerId || ''),
+              name: String(data.sellerName || 'Vendeur SamaDeal'),
+              avatar: String(data.sellerAvatar || DEFAULT_AVATAR),
+              phone: String(data.sellerPhone || '+221 77 452 89 12'),
+              whatsapp: String(data.sellerWhatsapp || data.sellerPhone || '+221 77 452 89 12'),
+              city: String(data.city || 'Dakar'),
+              rating: 5.0,
+              reviewCount: 1,
+              memberSince: 'Novembre 2026',
+              isVerified: Boolean(data.sellerVerified ?? true),
+              responseTime: 'Moins d\'une heure',
+              totalSales: 0,
+            },
+            isNegotiable: Boolean(data.isNegotiable),
+            hasDelivery: Boolean(data.hasDelivery),
+            deliveryFee: typeof data.deliveryFee === 'number' ? data.deliveryFee : 0,
+            isFeatured: Boolean(data.isFeatured),
+            boostPlanId: data.boostPlanId as BoostPlanId | undefined,
+            boostPlanName: typeof data.boostPlanName === 'string' ? data.boostPlanName : undefined,
+            boostPriority: typeof data.boostPriority === 'number' ? data.boostPriority : undefined,
+            boostStartedAt: typeof data.boostStartedAt === 'string' ? data.boostStartedAt : undefined,
+            boostExpiresAt: typeof data.boostExpiresAt === 'string' ? data.boostExpiresAt : undefined,
+            boostPaymentId: typeof data.boostPaymentId === 'string' ? data.boostPaymentId : undefined,
+            status: (data.status as Listing['status']) || 'active',
+            createdAt: 'En ligne',
+            viewsCount: Number(data.viewsCount || 1),
+            favoritesCount: Number(data.favoritesCount || 0),
+          };
+        });
+
+        setListings((prev) => {
+          const fsMap = new Map(fsListings.map((item) => [item.id, item]));
+          const mergedNonFs = prev.filter((item) => !fsMap.has(item.id));
+          return [...fsListings, ...mergedNonFs];
+        });
+      },
+      (error) => {
+        try {
+          handleFirestoreError(error, OperationType.LIST, 'listings');
+        } catch {
+          // Structured error logged in console
+        }
+      }
+    );
     return () => unsubscribe();
   }, []);
 
@@ -396,72 +566,82 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const setIsAdminModalOpen = (open: boolean) => {
     if (!open) { setIsAdminModalOpenRaw(false); return; }
-    if (isAdminAuthenticated) setIsAdminModalOpenRaw(true);
-    else setIsAdminAuthModalOpen(true);
+    if (isAdminAuthenticated || isSuperAdminEmail(currentUser?.email)) {
+      setIsAdminModalOpenRaw(true);
+    } else {
+      setIsAdminAuthModalOpen(true);
+    }
   };
 
   const loginUser = async (identifier: string, pass: string): Promise<boolean> => {
     const emailTrimmed = identifier.trim();
-    try {
-      const userCred = await signInWithEmailAndPassword(auth, emailTrimmed, pass);
-      await userCred.user.reload();
-      if (!userCred.user.emailVerified) {
-        setPendingConfirmationEmail(emailTrimmed);
-        setPendingPassword(pass);
-        try {
-          await sendEmailVerification(userCred.user, {
-            url: window.location.origin,
-            handleCodeInApp: true
-          });
-          showToast('Votre adresse e-mail n\'est pas encore validée. Un nouvel e-mail de vérification vient d\'être envoyé (vérifiez vos spams).', 'warning');
-        } catch (sendErr: any) {
-          if (sendErr.code === 'auth/too-many-requests') {
-            showToast('Votre e-mail n\'est pas encore validé. Un lien a déjà été envoyé récemment. Vérifiez vos spams.', 'warning');
-          } else {
-            showToast('Veuillez vérifier votre e-mail avant de vous connecter.', 'warning');
-          }
-        }
-        setAuthMode('email_confirmation_sent');
-        return false;
-      }
+    const isDemoAccount =
+      emailTrimmed === 'aminata.sall@samadeal.sn' ||
+      emailTrimmed === 'admin@samadeal.sn';
 
-      const seller: Seller = {
-        id: userCred.user.uid,
-        name: userCred.user.displayName || emailTrimmed.split('@')[0] || 'Membre SamaDeal',
-        email: emailTrimmed,
-        phone: '+221 77 452 89 12',
-        whatsapp: '+221 77 452 89 12',
-        city: 'Dakar',
-        neighborhood: 'Mermoz',
-        avatar: userCred.user.photoURL || DEFAULT_AVATAR,
-        rating: 5.0,
-        reviewCount: 3,
-        memberSince: 'Novembre 2026',
-        isVerified: true,
-        isBlocked: false,
-        accountType: 'particulier',
-        role: emailTrimmed === 'admin@samadeal.sn' ? 'admin' : 'user',
-        responseTime: 'Moins d\'une heure',
-        totalSales: 0,
-        salesCount: 0,
-        activeListingsCount: 0
-      };
-      setCurrentUser(seller);
+    if (!isDemoAccount) {
       try {
-        localStorage.setItem('samadeal_local_user', JSON.stringify(seller));
-      } catch {}
-      setIsAuthModalOpen(false);
-      showToast('Bienvenue sur SamaDeal ! 🇸🇳', 'success');
-      return true;
-    } catch (e: any) {
-      console.warn('Firebase login attempt failed:', e);
-      if (e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password' || e.code === 'auth/user-not-found') {
-        showToast('E-mail ou mot de passe incorrect.', 'warning');
-        return false;
+        const userCred = await signInWithEmailAndPassword(auth, emailTrimmed, pass);
+        await userCred.user.reload();
+        if (!userCred.user.emailVerified) {
+          setPendingConfirmationEmail(emailTrimmed);
+          setPendingPassword(pass);
+          try {
+            await sendEmailVerification(userCred.user, {
+              url: window.location.origin,
+              handleCodeInApp: true
+            });
+            showToast('Votre adresse e-mail n\'est pas encore validée. Un nouvel e-mail de vérification vient d\'être envoyé (vérifiez vos spams).', 'warning');
+          } catch (sendErr: any) {
+            if (sendErr.code === 'auth/too-many-requests') {
+              showToast('Votre e-mail n\'est pas encore validé. Un lien a déjà été envoyé récemment. Vérifiez vos spams.', 'warning');
+            } else {
+              showToast('Veuillez vérifier votre e-mail avant de vous connecter.', 'warning');
+            }
+          }
+          setAuthMode('email_confirmation_sent');
+          return false;
+        }
+
+        const seller: Seller = {
+          id: userCred.user.uid,
+          name: userCred.user.displayName || emailTrimmed.split('@')[0] || 'Membre SamaDeal',
+          email: emailTrimmed,
+          phone: '+221 77 452 89 12',
+          whatsapp: '+221 77 452 89 12',
+          city: 'Dakar',
+          neighborhood: 'Mermoz',
+          avatar: userCred.user.photoURL || DEFAULT_AVATAR,
+          rating: 5.0,
+          reviewCount: 3,
+          memberSince: 'Novembre 2026',
+          isVerified: true,
+          isBlocked: false,
+          accountType: 'particulier',
+          role: isSuperAdminEmail(emailTrimmed) ? 'admin' : 'user',
+          badge: isSuperAdminEmail(emailTrimmed) ? 'Super-Administrateur Propriétaire' : undefined,
+          responseTime: 'Moins d\'une heure',
+          totalSales: 0,
+          salesCount: 0,
+          activeListingsCount: 0
+        };
+        setCurrentUser(seller);
+        try {
+          localStorage.setItem('samadeal_local_user', JSON.stringify(seller));
+        } catch {}
+        setIsAuthModalOpen(false);
+        showToast('Bienvenue sur SamaDeal ! 🇸🇳', 'success');
+        return true;
+      } catch (e: any) {
+        console.warn('Firebase login attempt failed:', e);
+        if (e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password' || e.code === 'auth/user-not-found') {
+          showToast('E-mail ou mot de passe incorrect.', 'warning');
+          return false;
+        }
       }
     }
 
-    if (emailTrimmed === 'admin@samadeal.sn' || identifier.includes('demo') || identifier.includes('aminata')) {
+    if (isDemoAccount || identifier.includes('demo') || identifier.includes('aminata')) {
       const mockUser: Seller = {
         id: `user-${Date.now()}`,
         name: identifier.split('@')[0] || 'Membre SamaDeal',
@@ -494,6 +674,91 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     showToast('Identifiants incorrects. Veuillez réessayer ou vérifier vos accès.', 'warning');
     return false;
+  };
+
+  const googleSignInInFlightRef = useRef(false);
+
+  const loginWithGoogle = async (): Promise<boolean> => {
+    if (googleSignInInFlightRef.current) {
+      return false;
+    }
+    googleSignInInFlightRef.current = true;
+
+    const completeGoogleSeller = (user: import('firebase/auth').User) => {
+      const userEmail = (user.email || '').trim();
+      const isAdmin = isSuperAdminEmail(userEmail);
+
+      const seller: Seller = {
+        id: user.uid,
+        name: user.displayName || userEmail.split('@')[0] || 'Membre SamaDeal',
+        email: userEmail,
+        phone: user.phoneNumber || '+221 77 452 89 12',
+        whatsapp: user.phoneNumber || '+221 77 452 89 12',
+        city: 'Dakar',
+        neighborhood: 'Mermoz',
+        avatar: user.photoURL || DEFAULT_AVATAR,
+        rating: 5.0,
+        reviewCount: isAdmin ? 150 : 1,
+        memberSince: 'Novembre 2026',
+        isVerified: true,
+        isBlocked: false,
+        accountType: isAdmin ? 'professionnel' : 'particulier',
+        role: isAdmin ? 'admin' : 'user',
+        badge: isAdmin ? 'Super-Administrateur Propriétaire' : undefined,
+        responseTime: 'Moins d\'une heure',
+        totalSales: 0,
+        salesCount: 0,
+        activeListingsCount: 0
+      };
+
+      setCurrentUser(seller);
+      setAllUsers(prev => {
+        if (prev.some(u => u.id === seller.id || (u.email && u.email.toLowerCase() === userEmail.toLowerCase()))) {
+          return prev;
+        }
+        return [seller, ...prev];
+      });
+      try {
+        localStorage.setItem('samadeal_local_user', JSON.stringify(seller));
+      } catch {}
+
+      setIsAuthModalOpen(false);
+      showToast(
+        isAdmin
+          ? `Connecté avec Google (${userEmail}) — Accès Admin V2 activé 👑`
+          : `Bienvenue ${seller.name} sur SamaDeal ! 🇸🇳`,
+        'success'
+      );
+    };
+
+    try {
+      const result = await signInWithPopup(auth, googleAuthProvider, browserPopupRedirectResolver);
+      completeGoogleSeller(result.user);
+      return true;
+    } catch (e: any) {
+      console.warn('Google sign-in error:', e);
+      // In case Firebase PopupOperation threw after signing in via auth state
+      if (auth.currentUser && auth.currentUser.email) {
+        completeGoogleSeller(auth.currentUser);
+        return true;
+      }
+      if (e?.code === 'auth/popup-closed-by-user' || e?.code === 'auth/cancelled-popup-request') {
+        showToast('Connexion Google annulée.', 'info');
+      } else if (e?.code === 'auth/popup-blocked') {
+        showToast('La fenêtre Google a été bloquée par votre navigateur. Veuillez autoriser les pop-ups.', 'warning');
+      } else if (e?.code === 'auth/unauthorized-domain') {
+        showToast('Domaine non autorisé pour Google Sign-In dans Firebase Console.', 'warning');
+      } else if (e?.code === 'auth/operation-not-allowed') {
+        showToast('Le fournisseur Google n\'est pas encore activé dans Firebase Authentication.', 'warning');
+      } else if (typeof e?.message === 'string' && e.message.includes('Pending promise was never set')) {
+        showToast('La fenêtre de connexion Google a été interrompue. Veuillez réessayer.', 'info');
+      } else {
+        showToast(`Erreur de connexion Google : ${e?.message || 'Veuillez réessayer.'}`, 'warning');
+      }
+      return false;
+    } finally {
+      googleSignInInFlightRef.current = false;
+    }
   };
 
   const registerUser = async (data: {
@@ -830,6 +1095,46 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     showToast('Filtres réinitialisés', 'info');
   };
 
+  const openBoostCheckout = (listing: Listing, planId?: BoostPlanId) => {
+    if (!currentUser) {
+      openAuthModal('login');
+      showToast('Veuillez vous connecter pour booster une annonce.', 'info');
+      return;
+    }
+    setBoostCheckoutInitialPlan(planId || null);
+    setBoostCheckoutListing(listing);
+  };
+
+  const closeBoostCheckout = () => {
+    setBoostCheckoutListing(null);
+    setBoostCheckoutInitialPlan(null);
+  };
+
+  const applyConfirmedBoost = (
+    listingId: string,
+    boost: {
+      planId: BoostPlanId;
+      planName: string;
+      priority: number;
+      boostStartedAt: string;
+      boostExpiresAt: string;
+      paymentId: string;
+    }
+  ) => {
+    const patch = {
+      isFeatured: true,
+      boostPlanId: boost.planId,
+      boostPlanName: boost.planName,
+      boostPriority: boost.priority,
+      boostStartedAt: boost.boostStartedAt,
+      boostExpiresAt: boost.boostExpiresAt,
+      boostPaymentId: boost.paymentId,
+    };
+    setListings((prev) => prev.map((l) => (l.id === listingId ? { ...l, ...patch } : l)));
+    setSelectedListing((prev) => (prev && prev.id === listingId ? { ...prev, ...patch } : prev));
+    setBoostCheckoutListing((prev) => (prev && prev.id === listingId ? { ...prev, ...patch } : prev));
+  };
+
   const addListing = async (newListingData: {
     title: string;
     description: string;
@@ -844,63 +1149,154 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     hasDelivery: boolean;
     deliveryFee?: number;
     isBoosted?: boolean;
-  }): Promise<void> => {
+  }): Promise<Listing | null> => {
     if (!currentUser) {
       openAuthModal('login');
       showToast('Veuillez vous connecter pour publier une annonce.', 'info');
-      return;
+      return null;
     }
 
-    if (newListingData.title.trim().length < 5) { showToast('Le titre doit contenir au moins 5 caractères.', 'warning'); return; }
+    if (newListingData.title.trim().length < 5) {
+      showToast('Le titre doit contenir au moins 5 caractères.', 'warning');
+      return null;
+    }
+
     try {
       showToast('Publication en cours…', 'info');
+      const listingId = `listing_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const effectiveSellerId = auth.currentUser?.uid || currentUser.id;
+
+      const sanitizedTitle = newListingData.title.trim().slice(0, 160);
+      const sanitizedDescription = newListingData.description.trim().slice(0, 4000);
+      const sanitizedCity = (newListingData.city || 'Dakar').trim().slice(0, 80);
+      const sanitizedNeighborhood = (newListingData.neighborhood || '').trim().slice(0, 80);
+      const sanitizedImages = newListingData.images
+        .filter((img) => typeof img === 'string' && img.length > 0 && img.length <= 700000)
+        .slice(0, 8);
+      if (sanitizedImages.length === 0) {
+        showToast('Image trop volumineuse ou invalide. Veuillez réessayer avec une photo plus légère.', 'warning');
+        return null;
+      }
+      const sanitizedPrice = Math.min(1000000000, Math.max(0, Math.round(newListingData.price)));
+      const sanitizedDeliveryFee = Math.min(500000, Math.max(0, Math.round(newListingData.deliveryFee || 0)));
+      const safeAvatar =
+        typeof currentUser.avatar === 'string' && currentUser.avatar.length <= 1024
+          ? currentUser.avatar
+          : DEFAULT_AVATAR;
+
+      // Persist in Firestore if authenticated with verified Firebase Auth user
+      // Note: isFeatured MUST start false (Boost can only be activated server-side after real PayDunya payment)
+      if (auth.currentUser && auth.currentUser.emailVerified) {
+        const listingPath = `listings/${listingId}`;
+        try {
+          await setDoc(doc(db, 'listings', listingId), {
+            id: listingId,
+            title: sanitizedTitle,
+            description: sanitizedDescription,
+            price: sanitizedPrice,
+            currency: 'FCFA',
+            category: newListingData.category,
+            condition: newListingData.condition,
+            images: sanitizedImages,
+            city: sanitizedCity,
+            neighborhood: sanitizedNeighborhood,
+            sellerId: effectiveSellerId,
+            sellerName: (currentUser.name || 'Vendeur SamaDeal').slice(0, 120),
+            sellerPhone: (currentUser.phone || '+221 77 452 89 12').slice(0, 32),
+            sellerWhatsapp: (currentUser.whatsapp || currentUser.phone || '+221 77 452 89 12').slice(0, 32),
+            sellerAvatar: safeAvatar,
+            sellerVerified: Boolean(currentUser.isVerified),
+            isNegotiable: newListingData.isNegotiable,
+            hasDelivery: newListingData.hasDelivery,
+            deliveryFee: sanitizedDeliveryFee,
+            status: 'active',
+            isFeatured: false,
+            viewsCount: 1,
+            favoritesCount: 0,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } catch (fsErr) {
+          handleFirestoreError(fsErr, OperationType.CREATE, listingPath);
+        }
+      }
 
       const newListing: Listing = {
-        id: `listing-${Date.now()}`,
-        title: newListingData.title,
-        description: newListingData.description,
-        price: newListingData.price,
+        id: listingId,
+        title: sanitizedTitle,
+        description: sanitizedDescription,
+        price: sanitizedPrice,
         originalPrice: newListingData.originalPrice,
         currency: 'FCFA',
         category: newListingData.category,
         condition: newListingData.condition,
-        images: newListingData.images.length > 0 ? newListingData.images : ['https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=800&q=80'],
-        city: newListingData.city,
-        neighborhood: newListingData.neighborhood,
-        sellerId: currentUser.id,
-        seller: currentUser,
+        images: sanitizedImages,
+        city: sanitizedCity,
+        neighborhood: sanitizedNeighborhood,
+        sellerId: effectiveSellerId,
+        seller: { ...currentUser, id: effectiveSellerId, avatar: safeAvatar },
         isNegotiable: newListingData.isNegotiable,
         hasDelivery: newListingData.hasDelivery,
-        deliveryFee: newListingData.deliveryFee,
-        isFeatured: newListingData.isBoosted || false,
+        deliveryFee: sanitizedDeliveryFee,
+        isFeatured: false,
         status: 'active',
         createdAt: 'À l\'instant',
         viewsCount: 1,
         favoritesCount: 0
       };
 
-      setListings(prev => [newListing, ...prev]);
+      setListings(prev => [newListing, ...prev.filter(l => l.id !== listingId)]);
       setIsCreateListingOpen(false);
       showToast('Annonce publiée avec succès sur SamaDeal ! 🚀', 'success');
-    } catch (e: any) {
-      showToast(`Publication impossible : ${e.message}`, 'warning');
+      return newListing;
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Erreur inconnue';
+      showToast(
+        msg.includes('permission') || msg.includes('PERMISSION_DENIED')
+          ? 'Publication refusée par les règles Firestore. Vérifiez que votre compte est bien connecté.'
+          : `Publication impossible : ${msg}`,
+        'warning'
+      );
+      return null;
     }
   };
 
   const deleteListing = async (id: string) => {
     setListings(prev => prev.filter(l => l.id !== id));
     if (selectedListing?.id === id) setSelectedListing(null);
+    if (auth.currentUser?.emailVerified) {
+      try {
+        await deleteDoc(doc(db, 'listings', id));
+      } catch {
+        // Ignore if local mock listing not in Firestore
+      }
+    }
     showToast('Annonce supprimée', 'info');
   };
 
   const markAsSold = async (id: string) => {
     setListings(prev => prev.map(l => (l.id === id ? { ...l, status: 'sold' } : l)));
     if (selectedListing?.id === id) setSelectedListing(prev => prev ? { ...prev, status: 'sold' } : null);
+    if (auth.currentUser?.emailVerified) {
+      try {
+        await updateDoc(doc(db, 'listings', id), {
+          status: 'sold',
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        // Ignore if local mock listing not in Firestore
+      }
+    }
     showToast('Félicitations pour votre vente ! Article marqué comme vendu.', 'success');
   };
 
-  const boostListing = (_id: string) => {
-    showToast('Le boost payant sera bientôt disponible.', 'info');
+  const boostListing = (id: string) => {
+    const target = listings.find((l) => l.id === id);
+    if (!target) {
+      showToast('Annonce introuvable.', 'warning');
+      return;
+    }
+    openBoostCheckout(target);
   };
 
   const startChatWithSeller = (listing: Listing, quickMessage?: string) => {
@@ -1008,35 +1404,41 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     showToast(action === 'remove_listing' ? 'Annonce retirée de la plateforme.' : 'Signalement classé sans suite.', 'info');
   };
 
-  const loginAsAdmin = async (email: string, password: string): Promise<boolean> => {
-    if (email.trim() === 'admin@samadeal.sn' || password === 'admin123' || currentUser?.role === 'admin') {
+  const loginAsAdmin = async (email: string, password?: string): Promise<boolean> => {
+    const emailTrimmed = email.trim().toLowerCase();
+    if (isSuperAdminEmail(emailTrimmed) || isSuperAdminEmail(currentUser?.email)) {
       const adminUser: Seller = {
-        id: 'admin-id',
+        id: 'admin-champine00',
         name: 'Administrateur SamaDeal',
-        email: email.trim(),
-        phone: '+221 77 000 00 00',
-        whatsapp: '+221 77 000 00 00',
+        email: 'champine00@gmail.com',
+        phone: '+221 77 123 45 67',
+        whatsapp: '+221 77 123 45 67',
         city: 'Dakar',
-        avatar: DEFAULT_AVATAR,
+        neighborhood: 'Almadies',
+        avatar: currentUser?.avatar || DEFAULT_AVATAR,
         rating: 5.0,
-        reviewCount: 100,
-        memberSince: 'Janvier 2024',
+        reviewCount: 150,
+        memberSince: 'Novembre 2026',
         isVerified: true,
         isBlocked: false,
         accountType: 'professionnel',
         role: 'admin',
+        badge: 'Super-Administrateur Propriétaire',
         responseTime: 'Instantané',
         totalSales: 500,
         salesCount: 500,
         activeListingsCount: 10
       };
       setCurrentUser(adminUser);
+      try {
+        localStorage.setItem('samadeal_local_user', JSON.stringify(adminUser));
+      } catch {}
       setIsAdminAuthModalOpen(false);
       setIsAdminModalOpenRaw(true);
-      showToast('Connecté en tant qu\'administrateur SamaDeal 🛡️', 'success');
+      showToast('Bienvenue sur votre Tableau de Bord V2 (champine00@gmail.com) 👑', 'success');
       return true;
     }
-    showToast('Identifiants administrateur incorrects.', 'warning');
+    showToast('Accès refusé. Ce tableau de bord est exclusivement réservé au compte champine00@gmail.com.', 'warning');
     return false;
   };
 
@@ -1132,6 +1534,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         openAuthModal,
         closeAuthModal,
         loginUser,
+        loginWithGoogle,
         pendingConfirmationEmail,
         setPendingConfirmationEmail,
         resendConfirmationEmail,
@@ -1149,7 +1552,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         switchUserAccount,
 
         isAdminAuthenticated,
-        superAdminEmail: 'admin@samadeal.sn',
+        superAdminEmail: 'champine00@gmail.com',
         allUsers,
         platformSettings,
 
@@ -1189,6 +1592,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setIsMobileSimulator,
         isSupabaseModalOpen,
         setIsSupabaseModalOpen,
+        boostCheckoutListing,
+        boostCheckoutInitialPlan,
+        openBoostCheckout,
+        closeBoostCheckout,
+        applyConfirmedBoost,
         setActiveConversation,
 
         toggleFavorite,

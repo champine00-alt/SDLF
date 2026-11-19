@@ -18,9 +18,11 @@ import { AdminAuthModal } from './components/AdminAuthModal';
 import { SafetyGuidelinesModal } from './components/SafetyGuidelinesModal';
 import { ReportListingModal } from './components/ReportListingModal';
 import { AuthModal } from './components/AuthModal';
+import { BoostCheckoutModal } from './components/BoostCheckoutModal';
 import { MobileBottomNav } from './components/MobileBottomNav';
 import { Toast } from './components/Toast';
 import { Footer } from './components/Footer';
+import { getListingBoostPriority } from './lib/boostPlans';
 import { 
   Sparkles, 
   ShieldCheck, 
@@ -113,11 +115,13 @@ const MarketplaceContent: React.FC = () => {
       .sort((a, b) => {
         if (sortOption === 'price_asc') return a.price - b.price;
         if (sortOption === 'price_desc') return b.price - a.price;
-        if (sortOption === 'popular') return (b.viewsCount + b.favoritesCount * 3) - (a.viewsCount + a.favoritesCount * 3);
-        // default: latest (featured items first, then original order)
-        if (a.isFeatured && !b.isFeatured) return -1;
-        if (!a.isFeatured && b.isFeatured) return 1;
-        return 0;
+        if (sortOption === 'popular') {
+          const prioDiff = getListingBoostPriority(b) - getListingBoostPriority(a);
+          if (prioDiff !== 0) return prioDiff;
+          return (b.viewsCount + b.favoritesCount * 3) - (a.viewsCount + a.favoritesCount * 3);
+        }
+        // default: latest — active Boosts prioritized by formula tier (VIP > Pro > Premium > Standard > Découverte) until expiration
+        return getListingBoostPriority(b) - getListingBoostPriority(a);
       });
   }, [
     listings, 
@@ -241,6 +245,7 @@ const MarketplaceContent: React.FC = () => {
       <AuthModal />
       <ListingDetailModal />
       <CreateListingModal />
+      <BoostCheckoutModal />
       <ChatModal />
       <EscrowPaymentModal />
       <UserProfileModal />

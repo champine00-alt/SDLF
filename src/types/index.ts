@@ -9,6 +9,45 @@ export type CategoryId =
   | 'livres-loisirs'
   | 'informatique';
 
+export type BoostPlanId = 'decouverte' | 'standard' | 'premium' | 'pro' | 'vip';
+
+export type BoostPaymentMethod = 'wave' | 'orange_money';
+
+export interface BoostPlan {
+  id: BoostPlanId;
+  name: string;
+  priceFCFA: number;
+  durationHours: number;
+  durationLabel: string;
+  priority: number;
+  badgeLabel: string;
+  isPopular?: boolean;
+  tagline: string;
+  benefits: string[];
+}
+
+export interface BoostPaymentRecord {
+  paymentId: string;
+  listingId: string;
+  sellerId: string;
+  planId: BoostPlanId;
+  planName: string;
+  amountFCFA: number;
+  durationHours: number;
+  paymentMethod: BoostPaymentMethod;
+  provider: 'paydunya';
+  paydunyaToken?: string;
+  checkoutUrl?: string;
+  receiptUrl?: string;
+  status: 'pending' | 'completed' | 'failed' | 'cancelled' | 'duplicate_rejected';
+  activated: boolean;
+  idempotencyKey?: string;
+  boostStartedAt?: string;
+  boostExpiresAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Category {
   id: CategoryId;
   name: string;
@@ -83,6 +122,12 @@ export interface Listing {
   hasDelivery: boolean;
   deliveryFee?: number;
   isFeatured?: boolean;
+  boostPlanId?: BoostPlanId;
+  boostPlanName?: string;
+  boostPriority?: number;
+  boostStartedAt?: string;
+  boostExpiresAt?: string;
+  boostPaymentId?: string;
   isUrgent?: boolean;
   status: 'active' | 'pending' | 'reserved' | 'sold';
   createdAt: string;
